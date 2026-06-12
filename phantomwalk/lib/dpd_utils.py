@@ -5,6 +5,47 @@ import hoomd
 import time
 from cmeutils.sampling import is_equilibrated
 
+def initialize_from_topology(bond_list, density, box, bond_length=1.0, seed=1234):
+    ''' 
+    Currently expects bond_list to be list of ordered tuples with indices from 0 to N-1, each tuple describing a bond
+
+    '''
+    rng = np.random.default_rng(seed)
+    N = np.max(bond_list[:,1])+1 #assumes ordered tuples
+
+    #Overall algorithm:
+    # give all particles initial random coords
+    positions = rng.uniform(0, np.max(box), size=(N, 3))
+    # Generate a uniform-sphere-delta for each bond
+    # Cumulative sum of deltas gives positions for a chain off of a branch (or origin)
+    thetas = rng.uniform(0,2*np.pi,size=N)
+    phis = np.arccos(rng.uniform(-1,1,size=N)
+    x = np.sin(phis)*np.cos(thetas)
+    y = np.sin(phis)*np.sin(thetas)
+    z = np.cos(phis)
+    deltas = np.stack([x,y,z],axis=2) * bond_length
+    displacements = np.cumsum(deltas, axis=1) 
+    #positions_view[:, 1:, :] = starts[:, None, :] + displacements #deprecated
+    #TODO: loop over bonds and add displacements here
+
+    #pbc
+    #TODO Wrap coordinates along each axis separately
+    positions %= L
+    positions -= L/2
+
+    #TODO: Fold in PR 83 mupt, mupt.builder.all_atom_dpd functionality.
+
+    frame = gsd.hoomd.Frame()
+    frame.particles.types = ['A'] #update with all types
+    frame.particles.N = N
+    frame.particles.position = positions
+    frame.bonds.N = len(bonds_list)
+    frame.bonds.group = bond_list
+    frame.bonds.types = ['b'] #update with all types
+    frame.configuration.box = box
+
+    return frame
+
 def initialize_snapshot_rand_walk(num_pol, num_mon, density, bond_length=1.0, seed=1234):
     ''' 
     Create a HOOMD snapshot of a cubic box with the number density given by input parameters. Configure particles using a random walk. 
