@@ -5,6 +5,24 @@ import hoomd
 import time
 from cmeutils.sampling import is_equilibrated
 
+
+
+#https://github.com/joelaforet/mupt/blob/issue-77-aa-dpd-builder/mupt/builders/all_atom_dpd.py
+class _ParameterTables:
+    """HOOMD-ready bonded and vdW parameter tables."""
+
+    bond_params: dict[str, dict[str, float]] = field(default_factory=dict)
+    angle_params: dict[str, dict[str, float]] = field(default_factory=dict)
+    dihedral_params: dict[str, dict[str, float]] = field(default_factory=dict)
+    improper_params: dict[str, dict[str, float]] = field(default_factory=dict)
+    bond_type_by_group: dict[tuple[int, int], str] = field(default_factory=dict)
+    angle_type_by_group: dict[tuple[int, int, int], str] = field(default_factory=dict)
+    dihedral_type_by_group: dict[tuple[int, int, int, int], list[str]] = field(default_factory=dict)
+    improper_type_by_group: dict[tuple[int, int, int, int], list[str]] = field(default_factory=dict)
+    atom_epsilons: dict[int, float] = field(default_factory=dict)
+    atom_types_by_global: dict[int, str] = field(default_factory=dict)
+    epsilon_by_type: dict[str, float] = field(default_factory=dict)
+
 def initialize_from_topology(bond_list, density, box, bond_length=1.0, seed=1234):
     ''' 
     Currently expects bond_list to be list of ordered tuples with indices from 0 to N-1, each tuple describing a bond
