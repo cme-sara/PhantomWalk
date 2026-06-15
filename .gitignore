@@ -1,6 +1,7 @@
 # Output files from MD runs
 *.gsd
 *.txt
+*.swp
 notes
 
 # Byte-compiled / optimized / DLL files
