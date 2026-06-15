@@ -5,101 +5,33 @@ import hoomd
 import time
 from cmeutils.sampling import is_equilibrated
 
-
-
-#https://github.com/joelaforet/mupt/blob/issue-77-aa-dpd-builder/mupt/builders/all_atom_dpd.py
-class _ParameterTables:
-    """HOOMD-ready bonded and vdW parameter tables."""
-
-    bond_params: dict[str, dict[str, float]] = field(default_factory=dict)
-    angle_params: dict[str, dict[str, float]] = field(default_factory=dict)
-    dihedral_params: dict[str, dict[str, float]] = field(default_factory=dict)
-    improper_params: dict[str, dict[str, float]] = field(default_factory=dict)
-    bond_type_by_group: dict[tuple[int, int], str] = field(default_factory=dict)
-    angle_type_by_group: dict[tuple[int, int, int], str] = field(default_factory=dict)
-    dihedral_type_by_group: dict[tuple[int, int, int, int], list[str]] = field(default_factory=dict)
-    improper_type_by_group: dict[tuple[int, int, int, int], list[str]] = field(default_factory=dict)
-    atom_epsilons: dict[int, float] = field(default_factory=dict)
-    atom_types_by_global: dict[int, str] = field(default_factory=dict)
-    epsilon_by_type: dict[str, float] = field(default_factory=dict)
-
-def initialize_from_topology(bond_list, density, box, bond_length=1.0, seed=1234):
-    ''' 
-    Currently expects bond_list to be list of ordered tuples with indices from 0 to N-1, each tuple describing a bond
-
-    '''
-    rng = np.random.default_rng(seed)
-    N = np.max(bond_list[:,1])+1 #assumes ordered tuples
-
-    #Overall algorithm:
-    # give all particles initial random coords
-    positions = rng.uniform(0, np.max(box), size=(N, 3))
-    # Generate a uniform-sphere-delta for each bond
-    # Cumulative sum of deltas gives positions for a chain off of a branch (or origin)
-    thetas = rng.uniform(0,2*np.pi,size=N)
-    phis = np.arccos(rng.uniform(-1,1,size=N)
-    x = np.sin(phis)*np.cos(thetas)
-    y = np.sin(phis)*np.sin(thetas)
-    z = np.cos(phis)
-    deltas = np.stack([x,y,z],axis=2) * bond_length
-    displacements = np.cumsum(deltas, axis=1) 
-    #positions_view[:, 1:, :] = starts[:, None, :] + displacements #deprecated
-    #TODO: loop over bonds and add displacements here
-
-    #pbc
-    #TODO Wrap coordinates along each axis separately
-    positions %= L
-    positions -= L/2
-
-    #TODO: Fold in PR 83 mupt, mupt.builder.all_atom_dpd functionality.
-
-    frame = gsd.hoomd.Frame()
-    frame.particles.types = ['A'] #update with all types
-    frame.particles.N = N
-    frame.particles.position = positions
-    frame.bonds.N = len(bonds_list)
-    frame.bonds.group = bond_list
-    frame.bonds.types = ['b'] #update with all types
-    frame.configuration.box = box
-
-    return frame
-
 def initialize_snapshot_rand_walk(num_pol, num_mon, density, bond_length=1.0, seed=1234):
     ''' 
     Create a HOOMD snapshot of a cubic box with the number density given by input parameters. Configure particles using a random walk. 
 
     '''
     rng = np.random.default_rng(seed)
-
     N = num_pol * num_mon
     L = np.cbrt(N / density)
-
     positions = np.empty((N, 3))
     starts = rng.uniform(0, L, size=(num_pol, 3))
-
     thetas = rng.uniform(0,2*np.pi,size=(num_pol,num_mon-1))
     phis = np.arccos(rng.uniform(-1,1,size=(num_pol,num_mon-1)))
     x = np.sin(phis)*np.cos(thetas)
     y = np.sin(phis)*np.sin(thetas)
     z = np.cos(phis)
-
     deltas = np.stack([x,y,z],axis=2) * bond_length
     displacements = np.cumsum(deltas, axis=1)
-
     positions_view = positions.reshape(num_pol, num_mon, 3)
     positions_view[:, 0, :] = starts
     positions_view[:, 1:, :] = starts[:, None, :] + displacements
-
-    #pbc
     positions %= L
-    positions -= L/2
-
+    positions -= L/2 #TODO: use box in flowerMD
     indices = np.arange(N).reshape(num_pol, num_mon)
     bonds = np.column_stack([
         indices[:, :-1].ravel(),
         indices[:, 1:].ravel()
     ])
-
     frame = gsd.hoomd.Frame()
     frame.particles.types = ['A']
     frame.particles.N = N
@@ -107,8 +39,6 @@ def initialize_snapshot_rand_walk(num_pol, num_mon, density, bond_length=1.0, se
     frame.bonds.N = len(bonds)
     frame.bonds.group = bonds
     frame.bonds.types = ['b']
-    frame.configuration.box = [L, L, L, 0, 0, 0]
-
     return frame
 
 def check_bond_length_equilibration(snap, num_mon, num_pol, max_bond_length=1.1, min_bond_length=0.95):
@@ -255,7 +185,7 @@ def add_hoomd_writers(
     
     sim.operations.writers.append(gsd_writer)
     sim.operations.writers.append(table_file)
-    return rdf
+    return rdf, thermo_props
 
 def check_pair_energy(energy_idx=-1, log_file_name="log.txt"):
     """Check whether the pair interaction energy has equilibrated.

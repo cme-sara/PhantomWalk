@@ -7,6 +7,10 @@ import time
 from dpd_utils import initialize_snapshot_rand_walk,check_bond_length_equilibration,check_inter_particle_distance,add_hoomd_writers,check_pair_energy,simulation_energy_end
 
 
+def get_close(rdf):
+    b =(rdf.rdf[:,1] !=0).argmax()
+    return rdf.bin_centers[b][0]
+        
 def create_polymer_system_dpd(
     num_pol,
     num_mon,
@@ -24,13 +28,14 @@ def create_polymer_system_dpd(
     loop_timeout=60,
     energy=True,
     min_pair_dist=1.05,
+    energy_scaling= 5,
+    bond_tolerance = 0.05,
     write=True,
     gsd_file_name='trajectory.gsd',
     gsd_write_freq=10,
     log_file_name='log.txt',
     log_write_freq=10
 ):
-    
     '''
     Initialize a polymer system in a cubic box using a random walk and a HOOMD simulation with DPD forces.
 
@@ -90,11 +95,7 @@ def create_polymer_system_dpd(
         execution time of the DPD workflow, build + simulation wall time
         
     '''
-    #print(num_pol*num_mon)
-    #print(f"\nRunning with A={A}, gamma={gamma}, k={k}, "
-    #      f"num_pol={num_pol}, num_mon={num_mon}")
     start_time = time.perf_counter()
-    
     frame = initialize_snapshot_rand_walk(
         num_mon=num_mon,
         num_pol=num_pol,
@@ -103,8 +104,6 @@ def create_polymer_system_dpd(
         seed=np_seed
     )
     
-    build_stop = time.perf_counter()
-    #print("Total build time: ", build_stop-start_time)
     harmonic = hoomd.md.bond.Harmonic()
     harmonic.params["b"] = dict(r0=bond_l, k=k)
     integrator = hoomd.md.Integrator(dt=dt)
@@ -117,58 +116,58 @@ def create_polymer_system_dpd(
     nlist = hoomd.md.nlist.Cell(buffer=0.4,exclusions=['bond'])
     simulation.operations.nlist = nlist
     DPD = hoomd.md.pair.DPD(nlist, default_r_cut=r_cut, kT=kT)
+    DPDc = hoomd.md.pair.DPDConservative(nlist, default_r_cut=r_cut)
     DPD.params[('A', 'A')] = dict(A=A, gamma=gamma)
+    DPDc.params[('A', 'A')] = dict(A=A)
     integrator.forces.append(DPD)
+
+    N = num_mon*num_pol
+    maxPerParticle = A*( (min_pair_dist*min_pair_dist)/(2*r_cut) - min_pair_dist + r_cut/2)
+    maxPerParticle *= density*density*energy_scaling
+    maxPerBond = k*bond_tolerance*bond_tolerance/2
+    print("max bond = {:.2f}, max per Particle = {:.2f}".format(maxPerBond, maxPerParticle))
     
     if write:
-        rdf = add_hoomd_writers(
-            simulation,
-            gsd_file_name,
-            gsd_write_freq,
-            log_file_name,
-            log_write_freq
-        )
-
+        rdf,thermo = add_hoomd_writers( simulation, gsd_file_name, gsd_write_freq, log_file_name,log_write_freq )
     simulation.run(1) 
     for writer in simulation.operations.writers:
         if hasattr(writer, "flush"):
             writer.flush()
 
-    if energy:
-        while not simulation_energy_end(
-            A=A,
-            r=min_pair_dist,
-            r_cut=r_cut,
-            num_pol=num_pol,
-            num_mon=num_mon,
-            density=density,
-            log_file_name=log_file_name,
-        ):
-            check_time = time.perf_counter()
-            if (check_time-start_time) > loop_timeout:
-                print("Simulation timed out")
-                return simulation.state.get_snapshot(), 0
-            simulation.run(sim_steps_incr)
-            for writer in simulation.operations.writers:
-                if hasattr(writer, "flush"):
-                    writer.flush()
-    else:
-        while not check_inter_particle_distance(snap,minimum_distance=min_pair_dist):
-            check_time = time.perf_counter()
-            if (check_time-start_time) > loop_timeout:
-                print("Simulation timed out")
-                return snap,0
-            simulation.run(sim_steps_incr)
-            for writer in simulation.operations.writers:
-                if hasattr(writer, "flush"):
-                    writer.flush()
-            snap=simulation.state.get_snapshot()
+    while DPDc.energy/N > maxPerParticle:
+        check_time = time.perf_counter()
+        if (check_time-start_time) > loop_timeout:
+            print("Simulation timed out in energy")
+            return simulation.state.get_snapshot(), loop_timeout
+        simulation.run(sim_steps_incr)
+        for writer in simulation.operations.writers:
+            if hasattr(writer, "flush"):
+                writer.flush()
+        
+    while harmonic.energy/N > maxPerBond:#TODO normalize
+        check_time = time.perf_counter()
+        if (check_time-start_time) > loop_timeout:
+            print("Simulation timed out in bond energy")
+            return simulation.state.get_snapshot(), loop_timeout
+        simulation.run(sim_steps_incr)
+        for writer in simulation.operations.writers:
+            if hasattr(writer, "flush"):
+                writer.flush()
+
+    while get_close(rdf) < min_pair_dist:#TODO RDF
+        check_time = time.perf_counter()
+        if (check_time-start_time) > loop_timeout:
+            print("Simulation timed out in rdf polish")
+            return simulation.state.get_snapshot(), loop_timeout
+        simulation.run(sim_steps_incr)
+        for writer in simulation.operations.writers:
+            if hasattr(writer, "flush"):
+                writer.flush()
 
     end_time = time.perf_counter()
     total_time = end_time - start_time
-    #print("Total build and simulation time:", end_time - start_time)
+    print("Total build and simulation time:", end_time - start_time)
     np.savetxt(
         "rdf.csv", np.vstack((rdf.bin_centers, rdf.rdf)).T, delimiter=",", header="r, g(r)"
     )
-    #return snap, total_time
     return simulation.state.get_snapshot(), total_time
