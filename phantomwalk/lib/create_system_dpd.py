@@ -2,8 +2,8 @@ import numpy as np
 import hoomd 
 import time
 
-#from dpd_utils import initialize_snapshot_rand_walk,add_hoomd_writers
-from phantomwalk.lib.dpd_utils import initialize_snapshot_rand_walk,add_hoomd_writers
+from dpd_utils import initialize_snapshot_rand_walk,add_hoomd_writers
+#from phantomwalk.lib.dpd_utils import initialize_snapshot_rand_walk,add_hoomd_writers
 
 
 def get_close(rdf):
