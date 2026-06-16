@@ -145,3 +145,152 @@ def add_hoomd_writers(
     sim.operations.writers.append(table_file)
     return rdf, thermo_props
 
+def run_lj_simulation(
+    dpd_final_frame,
+    random_seed=25,
+    dt=0.0005,
+    lj_epsilon=1.0,
+    lj_sigma=1.0,
+    lj_r_cut=2.5,
+    fene_k=30,
+    fene_r0=1.01,
+    fene_epsilon=1.0,
+    fene_sigma=1.0,
+    fene_delta=0.05,
+    angle_k=3.0,
+    angle_t0=1.0,
+    dihedral_k=3.0,
+    dihedral_d=-1,
+    dihedral_n=3,
+    dihedral_phi0=0
+):
+    """Run an LJ + FENE + angle + dihedral equilibration simulation in HOOMD-blue.
+
+    Parameters
+    ----------
+    dpd_final_frame : gsd.hoomd.Frame
+        Initial configuration used to start the LJ simulation.
+
+    random_seed : int, optional, default 24
+        Random seed for reproducibility.
+
+    dt : float, optional, default 0.001
+        Integration timestep.
+
+    lj_epsilon : float, optional, default 1.0
+        Lennard-Jones interaction strength.
+
+    lj_sigma : float, optional, default 1.0
+        Lennard-Jones particle size parameter.
+
+    lj_r_cut : float, optional, default 1.2
+        Lennard-Jones cutoff radius.
+
+    fene_k : float, optional, default 30
+        FENE bond spring constant.
+
+    fene_r0 : float, optional, default 1.05
+        FENE maximum bond extension parameter.
+
+    fene_epsilon : float, optional, default 1.0
+        FENE-WCA epsilon parameter.
+
+    fene_sigma : float, optional, default 1.0
+        FENE-WCA sigma parameter.
+
+    fene_delta : float, optional, default 0
+        FENE potential shift parameter.
+
+    angle_k : float, optional, default 3.0
+        Harmonic angle force constant.
+
+    angle_t0 : float, optional, default 1.0
+        Equilibrium bond angle (radians).
+
+    dihedral_k : float, optional, default 3.0
+        Dihedral force constant.
+
+    dihedral_d : int, optional, default -1
+        Dihedral sign parameter.
+
+    dihedral_n : int, optional, default 3
+        Dihedral periodicity.
+
+    dihedral_phi0 : float, optional, default 0
+        Dihedral phase offset (radians).
+
+    Returns
+    -------
+    hoomd.Simulation
+        HOOMD simulation object after short equilibration run.
+    """
+
+    forces = []
+
+    # Pair force (LJ)
+    nlist = hoomd.md.nlist.Cell(buffer=0.40, exclusions=["bond"])
+    lj = hoomd.md.pair.LJ(nlist=nlist)
+    lj.params[('A', 'A')] = dict(epsilon=lj_epsilon, sigma=lj_sigma)
+    lj.r_cut[('A', 'A')] = lj_r_cut
+    forces.append(lj)
+
+    # FENE bonds
+    fene_bond = hoomd.md.bond.FENEWCA()
+    fene_bond.params['b'] = dict(
+        k=fene_k,
+        r0=fene_r0,
+        epsilon=fene_epsilon,
+        sigma=fene_sigma,
+        delta=fene_delta,
+    )
+    forces.append(fene_bond)
+    
+    ''' TODO add angles and dihedrals back into frame generation
+    # Angle potential
+    harmonic_angle = hoomd.md.angle.Harmonic()
+    harmonic_angle.params["A-A-A"] = dict(k=angle_k, t0=angle_t0)
+    forces.append(harmonic_angle)
+
+    # Dihedral potential
+    dihedral = hoomd.md.dihedral.Periodic()
+    dihedral.params["A-A-A-A"] = dict(
+        k=dihedral_k,
+        d=dihedral_d,
+        n=dihedral_n,
+        phi0=dihedral_phi0
+    )
+    forces.append(dihedral)
+    '''
+    
+    # Integrator
+    integrator_lj = hoomd.md.Integrator(dt=dt)
+    integrator_lj.forces = forces
+
+    integrator_lj.methods.append(
+        hoomd.md.methods.ConstantVolume(filter=hoomd.filter.All())
+    )
+
+    # Simulation
+    LJ_sim = hoomd.Simulation(
+        device=hoomd.device.auto_select(),
+        seed=random_seed
+    )
+
+    LJ_sim.create_state_from_snapshot(snapshot=dpd_final_frame)
+    LJ_sim.operations.integrator = integrator_lj
+
+    # Use your shared writer setup
+    add_hoomd_writers(sim=LJ_sim)
+
+    # Run short equilibration
+    LJ_sim.run(0)
+    LJ_sim.run(100)
+
+    # Flush outputs
+    for writer in LJ_sim.operations.writers:
+        if hasattr(writer, "flush"):
+            writer.flush()
+
+    print("LJ simulation finished.")
+
+    return LJ_sim
